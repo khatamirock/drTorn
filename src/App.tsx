@@ -15,6 +15,7 @@ export default function App() {
   const [needsAuth, setNeedsAuth] = useState(true);
   const [isLoggingIn, setIsLoggingIn] = useState(false);
   const [isInitializing, setIsInitializing] = useState(true);
+  const [loginError, setLoginError] = useState<string | null>(null);
 
   useEffect(() => {
     const unsubscribe = initAuth(
@@ -22,6 +23,7 @@ export default function App() {
         setUser(currentUser);
         setNeedsAuth(false);
         setIsInitializing(false);
+        setLoginError(null);
       },
       () => {
         setUser(null);
@@ -34,14 +36,23 @@ export default function App() {
 
   const handleLogin = async () => {
     setIsLoggingIn(true);
+    setLoginError(null);
     try {
       const result = await googleSignIn();
       if (result) {
         setUser(result.user);
         setNeedsAuth(false);
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error('Login failed:', err);
+      // Display specific error message for popup issues
+      if (err.code === 'auth/popup-closed-by-user') {
+         setLoginError('The sign-in popup was closed before completing. If you are in AI Studio preview, try opening the app in a new tab using the "Open App" button in the top right.');
+      } else if (err.code === 'auth/unauthorized-domain') {
+         setLoginError('This domain is not authorized for OAuth. Please ensure the domain is added to Firebase.');
+      } else {
+         setLoginError(err.message || 'Login failed. Try opening the app in a new tab.');
+      }
     } finally {
       setIsLoggingIn(false);
     }
@@ -76,6 +87,12 @@ export default function App() {
           </p>
           <GoogleSignInButton onClick={handleLogin} isLoading={isLoggingIn} />
           
+          {loginError && (
+            <div className="mt-4 p-3 bg-red-950/50 border border-red-900/50 text-red-400 text-xs rounded-xl flex items-start text-left select-text">
+              {loginError}
+            </div>
+          )}
+
           <div className="mt-8 flex items-center justify-center text-xs text-slate-500 space-x-1.5 font-medium tracking-wide">
             <Zap className="w-4 h-4 text-emerald-500" />
             <span>Vercel Edge Compatible</span>
