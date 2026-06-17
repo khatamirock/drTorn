@@ -1,185 +1,79 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Torrent, TorrentFile } from './types';
 import { getAccessToken } from './firebase';
 import { DownloadCloud, UploadCloud, CheckCircle, AlertCircle, Play, Link as LinkIcon, ArrowDown, Activity, File, X } from 'lucide-react';
 
 export const TorrentUploader: React.FC = () => {
   const [magnet, setMagnet] = useState('');
-  const [torrentInfo, setTorrentInfo] = useState<Torrent | null>(null);
-  const [error, setError] = useState<string | null>(null);
   
   // Stats
-  const [downloadProgress, setDownloadProgress] = useState(0);
-  const [downloadSpeed, setDownloadSpeed] = useState(0);
-  const [peers, setPeers] = useState(0);
-  
-  const [isDownloading, setIsDownloading] = useState(false);
-  const [isUploading, setIsUploading] = useState(false);
-  const [uploadProgress, setUploadProgress] = useState(0);
-  const [uploadComplete, setUploadComplete] = useState(false);
-
-  const clientRef = useRef<any>(null);
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [sessionData, setSessionData] = useState<any>(null);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    try {
-      if (window.WebTorrent && !clientRef.current) {
-        clientRef.current = new window.WebTorrent();
-        clientRef.current.on('error', (err: any) => {
-          console.error('WebTorrent Client error:', err);
-          setError(err.message || 'Unknown WebTorrent error');
-          setIsDownloading(false);
-        });
-      }
-    } catch (e: any) {
-      setError(`Failed to initialize WebTorrent: ${e.message}`);
-    }
-    return () => {
-      if (clientRef.current) {
+    let interval: any;
+    if (sessionId) {
+      interval = setInterval(async () => {
         try {
-          clientRef.current.destroy();
-        } catch (e) {
-          // ignore
+          const res = await fetch(`/api/torrent/status/${sessionId}`);
+          if (!res.ok) {
+            // Check if backend crashed and proxy is returning HTML
+            const contentType = res.headers.get('content-type');
+            if (contentType && contentType.includes('text/html')) {
+              throw new Error('Server connection lost. Please try again.');
+            }
+            throw new Error('Status fetch failed');
+          }
+          
+          const text = await res.text();
+          let data;
+          try {
+            data = JSON.parse(text);
+          } catch (e) {
+            throw new Error('Received invalid data from server.');
+          }
+          
+          setSessionData(data);
+          
+          if (data.status === 'completed' || data.status === 'error') {
+            if (data.error) setError(data.error);
+            clearInterval(interval);
+          }
+        } catch (err) {
+          console.error(err);
         }
-      }
-    };
-  }, []);
+      }, 1500);
+    }
+    return () => clearInterval(interval);
+  }, [sessionId]);
 
-  const handleStart = () => {
+  const handleStart = async () => {
     if (!magnet) {
       setError('Please enter a valid magnet link');
       return;
     }
-    if (!clientRef.current) {
-      setError('WebTorrent client is not loaded yet');
-      return;
-    }
-
-    setError(null);
-    setUploadComplete(false);
-    setUploadProgress(0);
-
-    // Add common WebRTC trackers to assist browser download
-    let torrentId = magnet;
-    if (torrentId.startsWith('magnet:')) {
-      const webrtcTrackers = [
-        'wss://tracker.btorrent.xyz',
-        'wss://tracker.openwebtorrent.com',
-        'wss://tracker.fastcast.nz'
-      ];
-      webrtcTrackers.forEach(tr => {
-        if (!torrentId.includes(encodeURIComponent(tr))) {
-          torrentId += `&tr=${encodeURIComponent(tr)}`;
-        }
-      });
-    }
 
     try {
-      clientRef.current.add(torrentId, (t: Torrent) => {
-        setTorrentInfo(t);
-        setIsDownloading(true);
-
-        t.on('error', (err: any) => {
-          console.error('Torrent error:', err);
-          setError(err.message || 'Unknown torrent error');
-          setIsDownloading(false);
-        });
-
-        t.on('download', () => {
-          setDownloadProgress(t.progress * 100);
-          setDownloadSpeed(t.downloadSpeed);
-          setPeers(t.numPeers);
-        });
-
-        t.on('done', () => {
-          setDownloadProgress(100);
-          setIsDownloading(false);
-          handleUpload(t);
-        });
-      });
-    } catch (e: any) {
-      setError(`Failed to start torrent: ${e.message}`);
-      setIsDownloading(false);
-    }
-  };
-
-  const uploadBlobToDrive = async (blob: Blob, name: string) => {
-    try {
-      setIsUploading(true);
       const token = await getAccessToken();
-      if (!token) throw new Error('Not authenticated');
+      if (!token) throw new Error('Not authenticated with Google');
 
-      // 1. Initial request for Resumable Upload
-      const metadata = { name };
-      const resSession = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable', {
+      setError(null);
+      setSessionId(null);
+      setSessionData(null);
+
+      const res = await fetch('/api/torrent/start', {
         method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-          'X-Upload-Content-Length': blob.size.toString()
-        },
-        body: JSON.stringify(metadata)
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ magnet, accessToken: token })
       });
-
-      if (!resSession.ok) {
-        throw new Error(`Session request failed: ${resSession.statusText}`);
-      }
-
-      const locationUrl = resSession.headers.get('Location');
-      if (!locationUrl) {
-        throw new Error('No upload location received from Google Drive');
-      }
-
-      // 2. Upload the file using XMLHttpRequest to easily track progress
-      return new Promise<void>((resolve, reject) => {
-        const xhr = new XMLHttpRequest();
-        xhr.open('PUT', locationUrl, true);
-        
-        xhr.upload.onprogress = (e) => {
-          if (e.lengthComputable) {
-            setUploadProgress((e.loaded / e.total) * 100);
-          }
-        };
-
-        xhr.onload = () => {
-          if (xhr.status >= 200 && xhr.status < 300) {
-            setUploadComplete(true);
-            resolve();
-          } else {
-            reject(new Error(`Upload failed with status ${xhr.status}`));
-          }
-        };
-
-        xhr.onerror = () => reject(new Error('Network error during upload'));
-
-        xhr.send(blob);
-      });
-
+      
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to start');
+      
+      setSessionId(data.sessionId);
     } catch (err: any) {
-      console.error(err);
-      setError(`Upload failed: ${err.message}`);
-    } finally {
-      setIsUploading(false);
+      setError(err.message);
     }
-  };
-
-  const handleUpload = (t: Torrent) => {
-    // For simplicity, we just upload the first/largest file
-    let largestFile = t.files[0];
-    for (const f of t.files) {
-      if (f.length > largestFile.length) {
-        largestFile = f;
-      }
-    }
-
-    if (!largestFile) return;
-
-    largestFile.getBlob(async (err: any, blob: Blob) => {
-      if (err) {
-        setError(`Failed to extract file: ${err.message}`);
-        return;
-      }
-      await uploadBlobToDrive(blob, largestFile.name);
-    });
   };
 
   const formatBytes = (bytes: number, decimals = 2) => {
@@ -190,6 +84,13 @@ export const TorrentUploader: React.FC = () => {
     const i = Math.floor(Math.log(bytes) / Math.log(k));
     return `${parseFloat((bytes / Math.pow(k, i)).toFixed(dm))} ${sizes[i]}`;
   };
+
+  const isConnecting = sessionData?.status === 'connecting';
+  const isDownloading = sessionData?.status === 'downloading';
+  const isUploading = sessionData?.status === 'uploading';
+  const isComplete = sessionData?.status === 'completed';
+
+  const isBusy = isConnecting || isDownloading || isUploading;
 
   return (
     <main className="flex-1 p-8 flex flex-col gap-8 overflow-y-auto">
@@ -214,7 +115,7 @@ export const TorrentUploader: React.FC = () => {
           </div>
           <button 
             onClick={handleStart}
-            disabled={isDownloading || isUploading}
+            disabled={isBusy}
             className="bg-blue-600 hover:bg-blue-500 text-white font-bold px-8 py-4 rounded-xl transition-colors shadow-lg shadow-blue-900/20 flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
           >
             Deploy to Drive
@@ -223,7 +124,7 @@ export const TorrentUploader: React.FC = () => {
         </div>
         <p className="mt-3 text-xs text-slate-500 flex items-center gap-1">
           <Activity className="w-3.5 h-3.5" />
-          Files will be downloaded in your browser and piped directly to your Google Drive root folder.
+          Files will be downloaded by the server and piped directly to your Google Drive root folder.
         </p>
 
         {error && (
@@ -240,7 +141,7 @@ export const TorrentUploader: React.FC = () => {
           <h2 className="text-lg font-semibold text-white">Active Pipeline</h2>
           <div className="flex gap-2">
             <span className="px-3 py-1 bg-slate-900 border border-slate-800 rounded-full text-[11px] font-medium text-slate-400">Up: {isUploading ? 'Active' : 'Idle'}</span>
-            <span className="px-3 py-1 bg-slate-900 border border-slate-800 rounded-full text-[11px] font-medium text-slate-400">Down: {formatBytes(downloadSpeed)}/s</span>
+            <span className="px-3 py-1 bg-slate-900 border border-slate-800 rounded-full text-[11px] font-medium text-slate-400">Down: {sessionData ? formatBytes(sessionData.speed) : '0 Bytes'}/s</span>
           </div>
         </div>
         
@@ -253,50 +154,62 @@ export const TorrentUploader: React.FC = () => {
           </div>
 
           <div className="divide-y divide-slate-800 overflow-y-auto">
-            {!torrentInfo && !isDownloading && !isUploading && !uploadComplete && (
+            {!sessionData && !isBusy && !isComplete && (
                <div className="py-12 text-center text-slate-600 text-sm italic">No active transfers. Add a magnet link to start.</div>
             )}
             
-            {torrentInfo && (
-              <div className={`grid grid-cols-12 gap-4 px-6 py-4 items-center transition-colors ${uploadComplete ? 'bg-emerald-500/5' : 'hover:bg-slate-800/30'}`}>
+            {sessionData && (
+              <div className={`grid grid-cols-12 gap-4 px-6 py-4 items-center transition-colors ${isComplete ? 'bg-emerald-500/5' : 'hover:bg-slate-800/30'}`}>
                 <div className="col-span-5 flex items-center gap-3 pr-2">
-                  <div className={`w-10 h-10 rounded flex items-center justify-center shrink-0 ${uploadComplete ? 'bg-emerald-500/10' : isUploading ? 'bg-purple-500/10' : 'bg-indigo-500/10'}`}>
-                    <File className={`w-5 h-5 ${uploadComplete ? 'text-emerald-400' : isUploading ? 'text-purple-400' : 'text-indigo-400'}`} />
+                  <div className={`w-10 h-10 rounded flex items-center justify-center shrink-0 ${isComplete ? 'bg-emerald-500/10' : isUploading ? 'bg-purple-500/10' : 'bg-indigo-500/10'}`}>
+                    <File className={`w-5 h-5 ${isComplete ? 'text-emerald-400' : isUploading ? 'text-purple-400' : 'text-indigo-400'}`} />
                   </div>
                   <div className="min-w-0">
-                    <p className="text-sm font-medium text-white leading-none mb-1 truncate" title={torrentInfo.name}>{torrentInfo.name}</p>
-                    <p className={`text-[11px] truncate ${uploadComplete ? 'text-emerald-500' : 'text-slate-500'}`}>
-                      {uploadComplete ? 'Upload Complete' : isUploading ? 'Uploading to Drive...' : 'Downloading from peers...'}
+                    <p className="text-sm font-medium text-white leading-none mb-1 truncate" title={sessionData.fileName || magnet}>{sessionData.fileName || 'Resolving metadata...'}</p>
+                    <p className={`text-[11px] truncate ${isComplete ? 'text-emerald-500' : 'text-slate-500'}`}>
+                      {isComplete ? 'Transfer Complete' : isUploading ? 'Uploading to Drive...' : isDownloading ? 'Downloading from peers...' : 'Connecting...'}
                     </p>
                   </div>
                 </div>
 
                 <div className="col-span-4">
-                  {(isDownloading || (!uploadComplete && !isUploading)) && (
+                  {isConnecting && (
                     <>
                       <div className="flex justify-between text-[10px] text-slate-400 mb-1.5">
-                        <span>Downloading • {peers} peers</span>
-                        <span>{downloadProgress.toFixed(1)}%</span>
+                        <span>Connecting to trackers...</span>
+                        <span>0%</span>
                       </div>
                       <div className="w-full h-1.5 bg-slate-950 rounded-full overflow-hidden">
-                        <div className="h-full bg-blue-500 rounded-full transition-all duration-300" style={{ width: `${downloadProgress}%` }}></div>
+                        <div className="h-full bg-slate-800 rounded-full w-[0%]"></div>
                       </div>
                     </>
                   )}
 
-                  {isUploading && !uploadComplete && (
+                  {isDownloading && (
                     <>
                       <div className="flex justify-between text-[10px] text-slate-400 mb-1.5">
-                        <span>Syncing to Drive</span>
-                        <span>{uploadProgress.toFixed(1)}%</span>
+                        <span>Downloading • {sessionData.peers} peers</span>
+                        <span>{sessionData.progress.toFixed(1)}%</span>
                       </div>
                       <div className="w-full h-1.5 bg-slate-950 rounded-full overflow-hidden">
-                        <div className="h-full bg-purple-500 rounded-full transition-all duration-300" style={{ width: `${uploadProgress}%` }}></div>
+                        <div className="h-full bg-blue-500 rounded-full transition-all duration-300" style={{ width: `${sessionData.progress}%` }}></div>
                       </div>
                     </>
                   )}
 
-                  {uploadComplete && (
+                  {isUploading && (
+                    <>
+                      <div className="flex justify-between text-[10px] text-slate-400 mb-1.5">
+                        <span>Syncing to Drive (Streaming)</span>
+                        <span>In Progress</span>
+                      </div>
+                      <div className="w-full h-1.5 bg-slate-950 rounded-full overflow-hidden">
+                        <div className="h-full bg-purple-500 rounded-full transition-all duration-300 w-full animate-pulse"></div>
+                      </div>
+                    </>
+                  )}
+
+                  {isComplete && (
                     <>
                       <div className="flex justify-between text-[10px] text-emerald-500/60 mb-1.5">
                         <span>Verified in Drive</span>
@@ -310,11 +223,11 @@ export const TorrentUploader: React.FC = () => {
                 </div>
 
                 <div className="col-span-2 text-sm text-slate-300 truncate">
-                  {formatBytes(torrentInfo.length)}
+                  {sessionData.fileSize ? formatBytes(sessionData.fileSize) : '---'}
                 </div>
 
                 <div className="col-span-1 text-right">
-                  {uploadComplete ? (
+                  {isComplete ? (
                      <CheckCircle className="w-5 h-5 ml-auto text-emerald-500" />
                   ) : (
                     <button className="text-slate-500 hover:text-rose-400 transition-colors" title="Cancel (not fully implemented)">
