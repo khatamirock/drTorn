@@ -200,11 +200,14 @@ export const TorrentUploader: React.FC = () => {
                   {isUploading && (
                     <>
                       <div className="flex justify-between text-[10px] text-slate-400 mb-1.5">
-                        <span>Syncing to Drive (Streaming)</span>
-                        <span>In Progress</span>
+                        <span className="flex items-center gap-1">
+                          <Activity className="w-3 h-3 text-purple-400 animate-pulse" />
+                          Streaming to Drive • {sessionData.peers} peers
+                        </span>
+                        <span>{sessionData.progress.toFixed(1)}%</span>
                       </div>
                       <div className="w-full h-1.5 bg-slate-950 rounded-full overflow-hidden">
-                        <div className="h-full bg-purple-500 rounded-full transition-all duration-300 w-full animate-pulse"></div>
+                        <div className="h-full bg-purple-500 rounded-full transition-all duration-300" style={{ width: `${sessionData.progress}%` }}></div>
                       </div>
                     </>
                   )}

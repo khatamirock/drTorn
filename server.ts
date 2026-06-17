@@ -1,13 +1,12 @@
 import express from 'express';
 import path from 'path';
 import { createServer as createViteServer } from 'vite';
-import WebTorrent from 'webtorrent';
+import torrentStream from 'torrent-stream';
 import { google } from 'googleapis';
 import crypto from 'crypto';
 
 // In-memory store for torrent sessions
 const sessions = new Map<string, any>();
-const torrentClient = new WebTorrent();
 
 process.on('uncaughtException', (err) => {
   console.error('Uncaught Exception:', err);
@@ -45,31 +44,22 @@ async function startServer() {
         error: null,
       });
 
-      // Add common trackers to assist torrent download
-      let torrentId = magnet;
-      if (torrentId.startsWith('magnet:')) {
-        const extraTrackers = [
+      const downloadPath = path.join(process.cwd(), '.downloads');
+      
+      const engine = torrentStream(magnet, {
+        tmp: downloadPath,
+        trackers: [
           'udp://tracker.opentrackr.org:1337/announce',
           'udp://open.demonii.com:1337/announce',
           'udp://tracker.openbittorrent.com:80',
           'udp://tracker.ccp.ovh:6969/announce',
-          'udp://exodus.desync.com:6969',
-          'wss://tracker.btorrent.xyz',
-          'wss://tracker.openwebtorrent.com',
-          'wss://tracker.fastcast.nz'
-        ];
-        extraTrackers.forEach(tr => {
-          if (!torrentId.includes(encodeURIComponent(tr)) && !torrentId.includes(tr)) {
-            torrentId += `&tr=${encodeURIComponent(tr)}`;
-          }
-        });
-      }
+          'udp://exodus.desync.com:6969'
+        ]
+      });
 
-      // Start the torrent
-      torrentClient.add(torrentId, { path: '/tmp/webtorrent' }, (torrent) => {
-        // Find largest file
-        let file = torrent.files[0];
-        for (const f of torrent.files) {
+      engine.on('ready', async () => {
+        let file: any = engine.files[0];
+        for (const f of engine.files) {
           if (f.length > file.length) file = f;
         }
 
@@ -77,68 +67,62 @@ async function startServer() {
         if (session) {
           session.fileName = file.name;
           session.fileSize = file.length;
-          session.status = 'downloading';
+          session.status = 'uploading'; // We are streaming directly to drive
         }
 
-        torrent.on('error', (err: any) => {
-          console.error('Torrent Error:', err);
+        // Setup Google Drive API
+        const auth = new google.auth.OAuth2();
+        auth.setCredentials({ access_token: accessToken });
+        const drive = google.drive({ version: 'v3', auth });
+        
+        let interval = setInterval(() => {
+          const s = sessions.get(sessionId);
+          if (s && s.status === 'uploading') {
+            const downloaded = engine.swarm.downloaded;
+            s.speed = engine.swarm.downloadSpeed();
+            s.peers = engine.swarm.wires.length;
+            s.progress = (downloaded / file.length) * 100;
+          }
+        }, 1000);
+
+        try {
+          // Stream the file directly to Google Drive
+          await drive.files.create({
+            requestBody: {
+              name: file.name,
+            },
+            media: {
+              body: file.createReadStream(),
+            },
+          });
+
+          const s = sessions.get(sessionId);
+          if (s) {
+            s.status = 'completed';
+            s.progress = 100;
+          }
+        } catch (err: any) {
+          console.error('Upload Error:', err);
           const s = sessions.get(sessionId);
           if (s) {
             s.status = 'error';
-            s.error = err.message || 'Torrent error';
+            s.error = err.message || 'Upload failed';
           }
-        });
-
-        torrent.on('download', () => {
-          const s = sessions.get(sessionId);
-          if (s && s.status === 'downloading') {
-            s.progress = torrent.progress * 100;
-            s.speed = torrent.downloadSpeed;
-            s.peers = torrent.numPeers;
-          }
-        });
-
-        torrent.on('done', async () => {
-          const s = sessions.get(sessionId);
-          if (s) {
-            s.progress = 100;
-            s.status = 'uploading';
-          }
-
+        } finally {
+          clearInterval(interval);
           try {
-            // Setup Google Drive API
-            const auth = new google.auth.OAuth2();
-            auth.setCredentials({ access_token: accessToken });
-            const drive = google.drive({ version: 'v3', auth });
-
-            // Stream the file directly to Google Drive
-            await drive.files.create({
-              requestBody: {
-                name: file.name,
-              },
-              media: {
-                body: file.createReadStream(),
-              },
-            });
-
-            if (sessions.has(sessionId)) {
-              sessions.get(sessionId).status = 'completed';
-            }
-          } catch (err: any) {
-            console.error('Upload Error:', err);
-            if (sessions.has(sessionId)) {
-              sessions.get(sessionId).status = 'error';
-              sessions.get(sessionId).error = err.message || 'Upload failed';
-            }
-          } finally {
-            // Destroy this torrent from the torrent client to free memory/disk
-            torrent.destroy();
-          }
-        });
+             engine.destroy(() => {});
+          } catch(e) {}
+        }
       });
-
-      torrentClient.on('error', (err) => {
-        console.error('Torrent Client Error:', err);
+      
+      engine.on('error', (err: any) => {
+         console.error('Engine error:', err);
+         const s = sessions.get(sessionId);
+         if (s) {
+           s.status = 'error';
+           s.error = err.message;
+         }
       });
 
       res.json({ sessionId });
