@@ -21,12 +21,25 @@ export const TorrentUploader: React.FC = () => {
   const clientRef = useRef<any>(null);
 
   useEffect(() => {
-    if (window.WebTorrent && !clientRef.current) {
-      clientRef.current = new window.WebTorrent();
+    try {
+      if (window.WebTorrent && !clientRef.current) {
+        clientRef.current = new window.WebTorrent();
+        clientRef.current.on('error', (err: any) => {
+          console.error('WebTorrent Client error:', err);
+          setError(err.message || 'Unknown WebTorrent error');
+          setIsDownloading(false);
+        });
+      }
+    } catch (e: any) {
+      setError(`Failed to initialize WebTorrent: ${e.message}`);
     }
     return () => {
       if (clientRef.current) {
-        clientRef.current.destroy();
+        try {
+          clientRef.current.destroy();
+        } catch (e) {
+          // ignore
+        }
       }
     };
   }, []);
@@ -45,22 +58,48 @@ export const TorrentUploader: React.FC = () => {
     setUploadComplete(false);
     setUploadProgress(0);
 
-    clientRef.current.add(magnet, (t: Torrent) => {
-      setTorrentInfo(t);
-      setIsDownloading(true);
-
-      t.on('download', () => {
-        setDownloadProgress(t.progress * 100);
-        setDownloadSpeed(t.downloadSpeed);
-        setPeers(t.numPeers);
+    // Add common WebRTC trackers to assist browser download
+    let torrentId = magnet;
+    if (torrentId.startsWith('magnet:')) {
+      const webrtcTrackers = [
+        'wss://tracker.btorrent.xyz',
+        'wss://tracker.openwebtorrent.com',
+        'wss://tracker.fastcast.nz'
+      ];
+      webrtcTrackers.forEach(tr => {
+        if (!torrentId.includes(encodeURIComponent(tr))) {
+          torrentId += `&tr=${encodeURIComponent(tr)}`;
+        }
       });
+    }
 
-      t.on('done', () => {
-        setDownloadProgress(100);
-        setIsDownloading(false);
-        handleUpload(t);
+    try {
+      clientRef.current.add(torrentId, (t: Torrent) => {
+        setTorrentInfo(t);
+        setIsDownloading(true);
+
+        t.on('error', (err: any) => {
+          console.error('Torrent error:', err);
+          setError(err.message || 'Unknown torrent error');
+          setIsDownloading(false);
+        });
+
+        t.on('download', () => {
+          setDownloadProgress(t.progress * 100);
+          setDownloadSpeed(t.downloadSpeed);
+          setPeers(t.numPeers);
+        });
+
+        t.on('done', () => {
+          setDownloadProgress(100);
+          setIsDownloading(false);
+          handleUpload(t);
+        });
       });
-    });
+    } catch (e: any) {
+      setError(`Failed to start torrent: ${e.message}`);
+      setIsDownloading(false);
+    }
   };
 
   const uploadBlobToDrive = async (blob: Blob, name: string) => {
