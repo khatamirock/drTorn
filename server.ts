@@ -5,6 +5,7 @@ import torrentStream from 'torrent-stream';
 import { google } from 'googleapis';
 import crypto from 'crypto';
 import os from 'os';
+import fs from 'fs';
 
 // In-memory store for torrent sessions
 const sessions = new Map<string, any>();
@@ -46,6 +47,9 @@ app.post('/api/torrent/start', async (req, res) => {
     });
 
     const downloadPath = process.env.VERCEL ? path.join(os.tmpdir(), 'webtorrent') : path.join(process.cwd(), '.downloads');
+    if (!fs.existsSync(downloadPath)) {
+      fs.mkdirSync(downloadPath, { recursive: true });
+    }
     
     const engine = torrentStream(magnet, {
       tmp: downloadPath,
