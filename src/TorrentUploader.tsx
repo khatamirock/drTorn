@@ -181,14 +181,28 @@ export const TorrentUploader: React.FC<{ isGuest?: boolean }> = ({ isGuest }) =>
            <div className="p-4 bg-slate-900 text-sm text-slate-400 flex flex-col sm:flex-row justify-between items-center gap-4">
              <div className="flex flex-col">
                 <span>Streaming Status: Buffering from {sessionData.peers} peers</span>
-                <span className="text-xs text-slate-500 mt-1">If the video isn't playing, it might be an unsupported format (like .mkv) or buffering metadata.</span>
+                {sessionData.fileName && (sessionData.fileName.includes('.mkv') || sessionData.fileName.toLowerCase().includes('x265') || sessionData.fileName.toLowerCase().includes('hevc')) ? (
+                  <span className="text-xs text-rose-400 mt-1 font-medium bg-rose-500/10 px-2 py-1 rounded inline-block w-max">
+                    ⚠️ The browser does not natively support MKV/x265 video formats. Please use the "Play in VLC" or "Download" buttons.
+                  </span>
+                ) : (
+                  <span className="text-xs text-slate-500 mt-1">If the video isn't playing, it might be buffering metadata.</span>
+                )}
              </div>
-             <div className="flex items-center gap-4">
+             <div className="flex items-center gap-2">
                <span className="font-mono bg-slate-950 px-2 py-1 rounded text-emerald-400">{sessionData.speed ? formatBytes(sessionData.speed) : '0 Bytes'}/s</span>
+               <a 
+                 href={`vlc://${window.location.origin}/api/torrent/stream/${sessionId}`}
+                 className="bg-orange-600 hover:bg-orange-500 text-white px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1 transition-colors shrink-0"
+                 title="Requires VLC Media Player installed"
+               >
+                 <Play className="w-4 h-4" />
+                 Play in VLC
+               </a>
                <a 
                  href={`/api/torrent/stream/${sessionId}?download=true`} 
                  download={sessionData.fileName}
-                 className="bg-slate-800 hover:bg-slate-700 text-white px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1 transition-colors"
+                 className="bg-slate-800 hover:bg-slate-700 text-white px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1 transition-colors shrink-0"
                >
                  <DownloadCloud className="w-4 h-4" />
                  Download File
