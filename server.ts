@@ -25,10 +25,10 @@ async function startServer() {
 
   app.post('/api/torrent/start', async (req, res) => {
     try {
-      const { magnet, accessToken } = req.body;
+      const { magnet, accessToken, action = 'save' } = req.body;
       
-      if (!magnet || !accessToken) {
-        return res.status(400).json({ error: 'Magnet link and access token are required' });
+      if (!magnet || (action === 'save' && !accessToken)) {
+        return res.status(400).json({ error: 'Magnet link and access token are required for saving to Drive' });
       }
 
       const sessionId = crypto.randomUUID();
@@ -42,6 +42,9 @@ async function startServer() {
         fileName: '',
         fileSize: 0,
         error: null,
+        action: action,
+        engine: null,
+        file: null
       });
 
       const downloadPath = path.join(process.cwd(), '.downloads');
@@ -60,15 +63,42 @@ async function startServer() {
       engine.on('ready', async () => {
         let file: any = engine.files[0];
         for (const f of engine.files) {
-          if (f.length > file.length) file = f;
+           // Try to prefer video files for streaming mode
+          if (action === 'stream' && (f.name.endsWith('.mp4') || f.name.endsWith('.mkv') || f.name.endsWith('.webm'))) {
+              if (!file.name.match(/\.(mp4|mkv|webm)$/i) || f.length > file.length) file = f;
+          } else {
+             if (f.length > file.length) file = f;
+          }
         }
 
         const session = sessions.get(sessionId);
-        if (session) {
-          session.fileName = file.name;
-          session.fileSize = file.length;
-          session.status = 'uploading'; // We are streaming directly to drive
+        if (!session) return;
+        
+        session.fileName = file.name;
+        session.fileSize = file.length;
+        session.engine = engine;
+        session.file = file;
+
+        if (action === 'stream') {
+           session.status = 'ready_to_stream';
+           
+           // Status updater for streaming (progress reflects downloaded chunks)
+           let interval = setInterval(() => {
+             const s = sessions.get(sessionId);
+             if (s && s.status === 'ready_to_stream') {
+               const downloaded = engine.swarm.downloaded;
+               s.speed = engine.swarm.downloadSpeed();
+               s.peers = engine.swarm.wires.length;
+               s.progress = (downloaded / file.length) * 100;
+             } else {
+                 clearInterval(interval);
+             }
+           }, 1000);
+           
+           return;
         }
+
+        session.status = 'uploading'; // Saving to drive mode
 
         // Setup Google Drive API
         const auth = new google.auth.OAuth2();
@@ -137,7 +167,57 @@ async function startServer() {
     if (!session) {
       return res.status(404).json({ error: 'Session not found' });
     }
-    res.json(session);
+    // Omit sensitive structures
+    const { engine, file, ...safeSession } = session;
+    res.json(safeSession);
+  });
+
+  app.get('/api/torrent/stream/:id', (req, res) => {
+    const session = sessions.get(req.params.id);
+    if (!session || !session.file || !session.engine) {
+      return res.status(404).send('Not found or not ready');
+    }
+
+    const file = session.file;
+    const fileSize = file.length;
+    let contentType = 'video/mp4'; // default
+    if (file.name.endsWith('.mkv')) contentType = 'video/x-matroska';
+    if (file.name.endsWith('.webm')) contentType = 'video/webm';
+
+    const range = req.headers.range;
+    if (range) {
+      const parts = range.replace(/bytes=/, "").split("-");
+      const start = parseInt(parts[0], 10);
+      const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+
+      const chunksize = (end - start) + 1;
+      const fileStream = file.createReadStream({ start, end });
+
+      res.writeHead(206, {
+        'Content-Range': `bytes ${start}-${end}/${fileSize}`,
+        'Accept-Ranges': 'bytes',
+        'Content-Length': chunksize,
+        'Content-Type': contentType,
+      });
+      fileStream.pipe(res);
+    } else {
+      res.writeHead(200, {
+        'Content-Length': fileSize,
+        'Content-Type': contentType,
+      });
+      file.createReadStream().pipe(res);
+    }
+  });
+
+  app.delete('/api/torrent/:id', (req, res) => {
+     const session = sessions.get(req.params.id);
+     if (session) {
+         if (session.engine) {
+             try { session.engine.destroy(() => {}); } catch(e) {}
+         }
+         sessions.delete(req.params.id);
+     }
+     res.json({ success: true });
   });
 
   // --- VITE MIDDLEWARE / SPA FALLBACK ---

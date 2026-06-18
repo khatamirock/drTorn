@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { getAccessToken } from './firebase';
 import { DownloadCloud, UploadCloud, CheckCircle, AlertCircle, Play, Link as LinkIcon, ArrowDown, Activity, File, X } from 'lucide-react';
 
-export const TorrentUploader: React.FC = () => {
+export const TorrentUploader: React.FC<{ isGuest?: boolean }> = ({ isGuest }) => {
   const [magnet, setMagnet] = useState('');
   
   // Stats
@@ -47,15 +47,18 @@ export const TorrentUploader: React.FC = () => {
     return () => clearInterval(interval);
   }, [sessionId]);
 
-  const handleStart = async () => {
+  const handleStart = async (action: 'save' | 'stream') => {
     if (!magnet) {
       setError('Please enter a valid magnet link');
       return;
     }
 
     try {
-      const token = await getAccessToken();
-      if (!token) throw new Error('Not authenticated with Google');
+      let token = null;
+      if (action === 'save') {
+        token = await getAccessToken();
+        if (!token) throw new Error('Not authenticated with Google');
+      }
 
       setError(null);
       setSessionId(null);
@@ -64,7 +67,7 @@ export const TorrentUploader: React.FC = () => {
       const res = await fetch('/api/torrent/start', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ magnet, accessToken: token })
+        body: JSON.stringify({ magnet, accessToken: token, action })
       });
       
       const data = await res.json();
@@ -74,6 +77,14 @@ export const TorrentUploader: React.FC = () => {
     } catch (err: any) {
       setError(err.message);
     }
+  };
+
+  const handleCancel = async () => {
+     if (sessionId) {
+       await fetch(`/api/torrent/${sessionId}`, { method: 'DELETE' });
+       setSessionId(null);
+       setSessionData(null);
+     }
   };
 
   const formatBytes = (bytes: number, decimals = 2) => {
@@ -88,9 +99,10 @@ export const TorrentUploader: React.FC = () => {
   const isConnecting = sessionData?.status === 'connecting';
   const isDownloading = sessionData?.status === 'downloading';
   const isUploading = sessionData?.status === 'uploading';
+  const isReadyToStream = sessionData?.status === 'ready_to_stream';
   const isComplete = sessionData?.status === 'completed';
 
-  const isBusy = isConnecting || isDownloading || isUploading;
+  const isBusy = isConnecting || isDownloading || isUploading || isReadyToStream;
 
   return (
     <main className="flex-1 p-8 flex flex-col gap-8 overflow-y-auto">
@@ -114,17 +126,29 @@ export const TorrentUploader: React.FC = () => {
             </div>
           </div>
           <button 
-            onClick={handleStart}
-            disabled={isBusy}
-            className="bg-blue-600 hover:bg-blue-500 text-white font-bold px-8 py-4 rounded-xl transition-colors shadow-lg shadow-blue-900/20 flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+            onClick={() => handleStart('save')}
+            disabled={isBusy || isGuest}
+            title={isGuest ? "Sign in to save to Google Drive" : "Save to Google Drive"}
+            className="bg-blue-600 hover:bg-blue-500 text-white font-bold px-6 py-4 rounded-xl transition-colors shadow-lg shadow-blue-900/20 flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            Deploy to Drive
-            <ArrowDown className="w-5 h-5" />
+            Save to Drive
+            <ArrowDown className="w-4 h-4" />
+          </button>
+          <button 
+            onClick={() => handleStart('stream')}
+            disabled={isBusy}
+            title="Stream video directly in the browser"
+            className="bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-6 py-4 rounded-xl transition-colors shadow-lg shadow-emerald-900/20 flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            Play Video
+            <Play className="w-4 h-4" />
           </button>
         </div>
         <p className="mt-3 text-xs text-slate-500 flex items-center gap-1">
           <Activity className="w-3.5 h-3.5" />
-          Files will be downloaded by the server and piped directly to your Google Drive root folder.
+          {isGuest 
+            ? "You are using Guest Mode. You can stream videos directly in the browser. Sign in to save files to Google Drive." 
+            : "You can save the file directly to your Google Drive, or stream it directly in the browser."}
         </p>
 
         {error && (
@@ -135,8 +159,26 @@ export const TorrentUploader: React.FC = () => {
         )}
       </section>
 
+      {/* Video Player Section */}
+      {isReadyToStream && sessionId && (
+        <section className="bg-black border border-slate-800 rounded-2xl overflow-hidden shadow-2xl shrink-0 flex flex-col self-center max-w-4xl w-full">
+           <video 
+             src={`/api/torrent/stream/${sessionId}`} 
+             controls 
+             autoPlay 
+             className="w-full aspect-video"
+           >
+             Your browser does not support the video tag.
+           </video>
+           <div className="p-4 bg-slate-900 text-sm text-slate-400 flex justify-between items-center">
+             <span>Streaming Status: Buffering from {sessionData.peers} peers</span>
+             <span>{sessionData.speed ? formatBytes(sessionData.speed) : '0 Bytes'}/s</span>
+           </div>
+        </section>
+      )}
+
       {/* Transfers List */}
-      <section className="flex-1 flex flex-col mt-2 min-h-[300px]">
+      <section className="flex-1 flex flex-col mt-2 min-h-[150px]">
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-lg font-semibold text-white">Active Pipeline</h2>
           <div className="flex gap-2">
@@ -161,13 +203,13 @@ export const TorrentUploader: React.FC = () => {
             {sessionData && (
               <div className={`grid grid-cols-12 gap-4 px-6 py-4 items-center transition-colors ${isComplete ? 'bg-emerald-500/5' : 'hover:bg-slate-800/30'}`}>
                 <div className="col-span-5 flex items-center gap-3 pr-2">
-                  <div className={`w-10 h-10 rounded flex items-center justify-center shrink-0 ${isComplete ? 'bg-emerald-500/10' : isUploading ? 'bg-purple-500/10' : 'bg-indigo-500/10'}`}>
-                    <File className={`w-5 h-5 ${isComplete ? 'text-emerald-400' : isUploading ? 'text-purple-400' : 'text-indigo-400'}`} />
+                  <div className={`w-10 h-10 rounded flex items-center justify-center shrink-0 ${isComplete ? 'bg-emerald-500/10' : (isUploading || isReadyToStream) ? 'bg-purple-500/10' : 'bg-indigo-500/10'}`}>
+                    <File className={`w-5 h-5 ${isComplete ? 'text-emerald-400' : (isUploading || isReadyToStream) ? 'text-purple-400' : 'text-indigo-400'}`} />
                   </div>
                   <div className="min-w-0">
                     <p className="text-sm font-medium text-white leading-none mb-1 truncate" title={sessionData.fileName || magnet}>{sessionData.fileName || 'Resolving metadata...'}</p>
                     <p className={`text-[11px] truncate ${isComplete ? 'text-emerald-500' : 'text-slate-500'}`}>
-                      {isComplete ? 'Transfer Complete' : isUploading ? 'Uploading to Drive...' : isDownloading ? 'Downloading from peers...' : 'Connecting...'}
+                      {isComplete ? 'Transfer Complete' : isUploading ? 'Uploading to Drive...' : isReadyToStream ? 'Streaming Active' : 'Connecting...'}
                     </p>
                   </div>
                 </div>
@@ -212,6 +254,13 @@ export const TorrentUploader: React.FC = () => {
                     </>
                   )}
 
+                  {isReadyToStream && (
+                     <div className="flex justify-center text-[11px] text-emerald-400 items-center font-medium gap-1.5">
+                        <Activity className="w-3.5 h-3.5 animate-pulse" />
+                        Live Stream Running
+                     </div>
+                  )}
+
                   {isComplete && (
                     <>
                       <div className="flex justify-between text-[10px] text-emerald-500/60 mb-1.5">
@@ -233,7 +282,7 @@ export const TorrentUploader: React.FC = () => {
                   {isComplete ? (
                      <CheckCircle className="w-5 h-5 ml-auto text-emerald-500" />
                   ) : (
-                    <button className="text-slate-500 hover:text-rose-400 transition-colors" title="Cancel (not fully implemented)">
+                    <button onClick={handleCancel} className="text-slate-500 hover:text-rose-400 transition-colors" title="Cancel/Stop">
                       <X className="w-5 h-5 ml-auto" />
                     </button>
                   )}

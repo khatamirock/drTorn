@@ -86,6 +86,12 @@ export default function App() {
             Download torrents directly in your browser and pipe them straight to your Google Drive. No server bottlenecks.
           </p>
           <GoogleSignInButton onClick={handleLogin} isLoading={isLoggingIn} />
+          <button 
+            onClick={() => setNeedsAuth(false)} 
+            className="mt-4 text-sm font-medium text-slate-400 hover:text-white transition-colors underline underline-offset-4"
+          >
+            Continue as Guest (Streaming Only)
+          </button>
           
           {loginError && (
             <div className="mt-4 p-3 bg-red-950/50 border border-red-900/50 text-red-400 text-xs rounded-xl flex items-start text-left select-text">
@@ -120,23 +126,31 @@ export default function App() {
           </div>
           <div className="h-8 w-[1px] bg-slate-800"></div>
           <div className="flex items-center gap-3">
-            <div className="text-right flex flex-col items-end">
-              <p className="text-xs font-medium text-white">{user?.displayName || user?.email || 'User'}</p>
-              <button onClick={handleLogout} className="text-[10px] text-slate-500 hover:text-rose-400 transition-colors uppercase mt-0.5">Logout</button>
-            </div>
-            <div className="w-10 h-10 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center overflow-hidden">
-              {user?.photoURL ? (
-                <img src={user.photoURL} alt="Avatar" className="w-full h-full object-cover" />
-              ) : (
-                <HardDrive className="w-5 h-5 text-slate-500" />
-              )}
-            </div>
+            {user ? (
+              <>
+                <div className="text-right flex flex-col items-end">
+                  <p className="text-xs font-medium text-white">{user.displayName || user.email || 'User'}</p>
+                  <button onClick={handleLogout} className="text-[10px] text-slate-500 hover:text-rose-400 transition-colors uppercase mt-0.5">Logout</button>
+                </div>
+                <div className="w-10 h-10 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center overflow-hidden">
+                  {user.photoURL ? (
+                    <img src={user.photoURL} alt="Avatar" className="w-full h-full object-cover" />
+                  ) : (
+                    <HardDrive className="w-5 h-5 text-slate-500" />
+                  )}
+                </div>
+              </>
+            ) : (
+              <button onClick={() => setNeedsAuth(true)} className="text-sm text-blue-400 hover:text-blue-300 font-medium transition-colors">
+                Sign In
+              </button>
+            )}
           </div>
         </div>
       </nav>
 
       {/* Main Content Area */}
-      <TorrentUploader />
+      <TorrentUploader isGuest={!user} />
 
       {/* Footer Bar */}
       <footer className="h-12 shrink-0 border-t border-slate-800 bg-slate-950 px-8 flex items-center justify-between text-[11px] text-slate-500 font-medium">
