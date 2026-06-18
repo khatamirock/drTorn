@@ -188,7 +188,7 @@ export const TorrentUploader: React.FC<{ isGuest?: boolean }> = ({ isGuest }) =>
                       ⚠️ Live Server Transcoding Active
                     </span>
                     <span className="text-[11px] text-slate-500">
-                      Acts as a live stream; seeking/skipping is disabled. For full seek controls, use "Play in VLC" or "Download File". (Vercel max 10s-60s timeout may apply)
+                      Seeking is now enabled (may take a few seconds to buffer). For best performance, use "Play in VLC" or "Download File". (Vercel max timeout may apply)
                     </span>
                   </div>
                 ) : (

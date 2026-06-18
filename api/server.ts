@@ -7,9 +7,13 @@ import os from 'os';
 import fs from 'fs';
 import ffmpeg from 'fluent-ffmpeg';
 import ffmpegStatic from 'ffmpeg-static';
+import ffprobeStatic from 'ffprobe-static';
 
 if (ffmpegStatic) {
   ffmpeg.setFfmpegPath(ffmpegStatic);
+}
+if (ffprobeStatic && ffprobeStatic.path) {
+  ffmpeg.setFfprobePath(ffprobeStatic.path);
 }
 
 // In-memory store for torrent sessions
@@ -94,6 +98,16 @@ app.post('/api/torrent/start', async (req, res) => {
       if (action === 'stream') {
          session.status = 'ready_to_stream';
          file.select(); // Eagerly download the file pieces
+         
+         // Try to probe for duration
+         ffmpeg.ffprobe(`http://127.0.0.1:3000/api/torrent/stream/${sessionId}?direct=true`, (err, metadata) => {
+             if (!err && metadata && metadata.format && metadata.format.duration) {
+                 const s = sessions.get(sessionId);
+                 if (s) {
+                     s.duration = parseFloat(metadata.format.duration);
+                 }
+             }
+         });
          
          // Status updater for streaming (progress reflects downloaded chunks)
          let interval = setInterval(() => {
@@ -193,43 +207,72 @@ app.get('/api/torrent/stream/:id', (req, res) => {
 
   const file = session.file;
   const fileSize = file.length;
-  let contentType = 'video/mp4'; // default
+  let contentType = 'video/mp4';
   if (file.name.endsWith('.mkv')) contentType = 'video/x-matroska';
   if (file.name.endsWith('.webm')) contentType = 'video/webm';
 
-  const isUnsupported = file.name.endsWith('.mkv') || file.name.toLowerCase().includes('x265') || file.name.toLowerCase().includes('hevc');
+  const isUnsupported = (file.name.endsWith('.mkv') || file.name.toLowerCase().includes('x265') || file.name.toLowerCase().includes('hevc')) && req.query.direct !== 'true';
   const isDownload = req.query.download === 'true';
 
   if (isUnsupported && !isDownload) {
-    res.writeHead(200, {
+    const range = req.headers.range;
+    let startByte = 0;
+    let endByte = fileSize - 1;
+
+    if (range) {
+      const parts = range.replace(/bytes=/, "").split("-");
+      startByte = parseInt(parts[0], 10);
+      endByte = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+    }
+
+    const chunksize = (endByte - startByte) + 1;
+
+    res.writeHead(startByte > 0 ? 206 : 200, {
+      'Content-Range': `bytes ${startByte}-${endByte}/${fileSize}`,
+      'Accept-Ranges': 'bytes',
+      'Content-Length': chunksize,
       'Content-Type': 'video/mp4',
-      'Transfer-Encoding': 'chunked'
     });
+
+    if (req.method === 'HEAD') return res.end();
+
+    const percentage = startByte / fileSize;
     
     req.on('close', () => {
-       // Stop ffmpeg if player disconnects
        res.end();
     });
 
-    const stream = file.createReadStream();
-    ffmpeg(stream)
+    const localUrl = `http://127.0.0.1:3000/api/torrent/stream/${session.id}?direct=true`;
+
+    const cmd = ffmpeg(localUrl)
       .format('mp4')
       .videoCodec('libx264')
-      .audioCodec('aac')
-      .outputOptions([
+      .audioCodec('aac');
+
+    if (session.duration) {
+       const startTime = percentage * session.duration;
+       cmd.seekInput(startTime);
+    } else if (startByte > 0) {
+       // Fallback if no duration: cannot accurately seek time, but we try a rough byte-based or skip.
+       // Usually duration is fetched when file starts.
+       const estDuration = 7200; // Guess 2 hours
+       cmd.seekInput(percentage * estDuration);
+    }
+
+    cmd.outputOptions([
         '-preset', 'ultrafast',
         '-movflags', 'frag_keyframe+empty_moov',
         '-threads', '1'
       ])
       .on('error', (err) => {
-         console.error('ffmpeg encode error:', err);
+         // console.error('ffmpeg encode error:', err);
       })
       .pipe(res, { end: true });
     return;
   }
 
   const range = req.headers.range;
-  if (range && (!isUnsupported || isDownload)) {
+  if (range) {
     const parts = range.replace(/bytes=/, "").split("-");
     const start = parseInt(parts[0], 10);
     const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
