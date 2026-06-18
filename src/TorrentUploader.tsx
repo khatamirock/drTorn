@@ -9,6 +9,7 @@ export const TorrentUploader: React.FC<{ isGuest?: boolean }> = ({ isGuest }) =>
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [sessionData, setSessionData] = useState<any>(null);
   const [error, setError] = useState<string | null>(null);
+  const [seekTimeOffset, setSeekTimeOffset] = useState<number>(0);
 
   useEffect(() => {
     let interval: any;
@@ -63,6 +64,7 @@ export const TorrentUploader: React.FC<{ isGuest?: boolean }> = ({ isGuest }) =>
       setError(null);
       setSessionId(null);
       setSessionData(null);
+      setSeekTimeOffset(0);
 
       const res = await fetch('/api/torrent/start', {
         method: 'POST',
@@ -170,7 +172,8 @@ export const TorrentUploader: React.FC<{ isGuest?: boolean }> = ({ isGuest }) =>
       {isReadyToStream && sessionId && sessionData && (
         <section className="bg-black border border-slate-800 rounded-2xl overflow-hidden shadow-2xl shrink-0 flex flex-col self-center max-w-4xl w-full">
            <video 
-             src={`/api/torrent/stream/${sessionId}`} 
+             key={`video-${sessionId}-${seekTimeOffset}`}
+             src={`/api/torrent/stream/${sessionId}${seekTimeOffset ? `?time=${seekTimeOffset}` : ''}`}
              controls 
              autoPlay 
              playsInline
@@ -180,16 +183,34 @@ export const TorrentUploader: React.FC<{ isGuest?: boolean }> = ({ isGuest }) =>
              Your browser does not support the video tag.
            </video>
            <div className="p-4 bg-slate-900 text-sm text-slate-400 flex flex-col sm:flex-row justify-between items-center gap-4 border-t border-slate-800">
-             <div className="flex flex-col">
+             <div className="flex flex-col w-full sm:w-auto">
                 <span>Streaming Status: Buffering from {sessionData.peers} peers</span>
                 {sessionData.fileName && (sessionData.fileName.includes('.mkv') || sessionData.fileName.toLowerCase().includes('x265') || sessionData.fileName.toLowerCase().includes('hevc')) ? (
-                  <div className="flex flex-col gap-1">
-                    <span className="text-xs text-amber-500 mt-1 font-medium bg-amber-500/10 px-2 py-1 rounded inline-block w-max">
+                  <div className="flex flex-col gap-2 mt-2 w-full max-w-md">
+                    <span className="text-xs text-amber-500 font-medium bg-amber-500/10 px-2 py-1 rounded inline-block w-max mb-1">
                       ⚠️ Live Server Transcoding Active
                     </span>
-                    <span className="text-[11px] text-slate-500">
-                      Seeking is now enabled (may take a few seconds to buffer). For best performance, use "Play in VLC" or "Download File". (Vercel max timeout may apply)
-                    </span>
+                    {sessionData.duration ? (
+                      <div className="flex items-center gap-3">
+                        <span className="text-[10px] font-mono text-slate-500">SEEK</span>
+                        <input 
+                           type="range" 
+                           min="0" 
+                           max={sessionData.duration} 
+                           defaultValue={seekTimeOffset}
+                           onMouseUp={(e) => {
+                             const time = parseFloat((e.target as HTMLInputElement).value);
+                             setSeekTimeOffset(time);
+                           }}
+                           className="flex-1 h-1.5 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-amber-500"
+                        />
+                        <span className="text-[10px] font-mono text-slate-500">{Math.floor(sessionData.duration / 60)}m {Math.floor(sessionData.duration % 60)}s</span>
+                      </div>
+                    ) : (
+                      <span className="text-[11px] text-slate-500">
+                        Gathering duration metadata to enable seeking...
+                      </span>
+                    )}
                   </div>
                 ) : (
                   <span className="text-xs text-slate-500 mt-1">If the video isn't playing, it might be buffering metadata.</span>

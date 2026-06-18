@@ -215,32 +215,14 @@ app.get('/api/torrent/stream/:id', (req, res) => {
   const isDownload = req.query.download === 'true';
 
   if (isUnsupported && !isDownload) {
-    const range = req.headers.range;
-    let startByte = 0;
-    let endByte = fileSize - 1;
+    const timeParam = req.query.time ? parseFloat(req.query.time as string) : 0;
 
-    if (range) {
-      const parts = range.replace(/bytes=/, "").split("-");
-      startByte = parseInt(parts[0], 10);
-      endByte = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
-    }
-
-    const chunksize = (endByte - startByte) + 1;
-
-    res.writeHead(startByte > 0 ? 206 : 200, {
-      'Content-Range': `bytes ${startByte}-${endByte}/${fileSize}`,
-      'Accept-Ranges': 'bytes',
-      'Content-Length': chunksize,
+    res.writeHead(200, {
       'Content-Type': 'video/mp4',
+      'Transfer-Encoding': 'chunked'
     });
 
     if (req.method === 'HEAD') return res.end();
-
-    const percentage = startByte / fileSize;
-    
-    req.on('close', () => {
-       res.end();
-    });
 
     const localUrl = `http://127.0.0.1:3000/api/torrent/stream/${session.id}?direct=true`;
 
@@ -249,14 +231,8 @@ app.get('/api/torrent/stream/:id', (req, res) => {
       .videoCodec('libx264')
       .audioCodec('aac');
 
-    if (session.duration) {
-       const startTime = percentage * session.duration;
-       cmd.seekInput(startTime);
-    } else if (startByte > 0) {
-       // Fallback if no duration: cannot accurately seek time, but we try a rough byte-based or skip.
-       // Usually duration is fetched when file starts.
-       const estDuration = 7200; // Guess 2 hours
-       cmd.seekInput(percentage * estDuration);
+    if (timeParam > 0) {
+      cmd.seekInput(timeParam);
     }
 
     cmd.outputOptions([
@@ -265,9 +241,14 @@ app.get('/api/torrent/stream/:id', (req, res) => {
         '-threads', '1'
       ])
       .on('error', (err) => {
-         // console.error('ffmpeg encode error:', err);
+         // Ignore
       })
       .pipe(res, { end: true });
+      
+    req.on('close', () => {
+       res.end();
+    });
+    
     return;
   }
 
