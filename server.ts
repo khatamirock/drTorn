@@ -204,12 +204,14 @@ async function startServer() {
         'Accept-Ranges': 'bytes',
         'Content-Length': chunksize,
         'Content-Type': contentType,
+        ...(req.query.download === 'true' && { 'Content-Disposition': `attachment; filename="${encodeURIComponent(file.name)}"` }),
       });
       fileStream.pipe(res);
     } else {
       res.writeHead(200, {
         'Content-Length': fileSize,
         'Content-Type': contentType,
+        ...(req.query.download === 'true' && { 'Content-Disposition': `attachment; filename="${encodeURIComponent(file.name)}"` }),
       });
       file.createReadStream().pipe(res);
     }
