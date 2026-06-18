@@ -5,12 +5,6 @@ import { google } from 'googleapis';
 import crypto from 'crypto';
 import os from 'os';
 import fs from 'fs';
-import ffmpeg from 'fluent-ffmpeg';
-import ffmpegStatic from 'ffmpeg-static';
-
-if (ffmpegStatic) {
-  ffmpeg.setFfmpegPath(ffmpegStatic);
-}
 
 // In-memory store for torrent sessions
 const sessions = new Map<string, any>();
@@ -193,43 +187,15 @@ app.get('/api/torrent/stream/:id', (req, res) => {
 
   const file = session.file;
   const fileSize = file.length;
-  let contentType = 'video/mp4'; // default
-  if (file.name.endsWith('.mkv')) contentType = 'video/x-matroska';
-  if (file.name.endsWith('.webm')) contentType = 'video/webm';
-
   const isUnsupported = file.name.endsWith('.mkv') || file.name.toLowerCase().includes('x265') || file.name.toLowerCase().includes('hevc');
   const isDownload = req.query.download === 'true';
 
-  if (isUnsupported && !isDownload) {
-    res.writeHead(200, {
-      'Content-Type': 'video/mp4',
-      'Transfer-Encoding': 'chunked'
-    });
-    
-    req.on('close', () => {
-       // Stop ffmpeg if player disconnects
-       res.end();
-    });
-
-    const stream = file.createReadStream();
-    ffmpeg(stream)
-      .format('mp4')
-      .videoCodec('libx264')
-      .audioCodec('aac')
-      .outputOptions([
-        '-preset', 'ultrafast',
-        '-movflags', 'frag_keyframe+empty_moov',
-        '-threads', '1'
-      ])
-      .on('error', (err) => {
-         console.error('ffmpeg encode error:', err);
-      })
-      .pipe(res, { end: true });
-    return;
-  }
+  let contentType = 'video/mp4'; 
+  if (file.name.endsWith('.mkv')) contentType = 'video/webm'; // Trick browser into using Matroska demuxer
+  if (file.name.endsWith('.webm')) contentType = 'video/webm';
 
   const range = req.headers.range;
-  if (range && (!isUnsupported || isDownload)) {
+  if (range && (!isUnsupported || isDownload || true)) {
     const parts = range.replace(/bytes=/, "").split("-");
     const start = parseInt(parts[0], 10);
     const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
