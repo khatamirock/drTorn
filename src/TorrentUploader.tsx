@@ -169,30 +169,23 @@ export const TorrentUploader: React.FC<{ isGuest?: boolean }> = ({ isGuest }) =>
       {/* Video Player Section */}
       {isReadyToStream && sessionId && sessionData && (
         <section className="bg-black border border-slate-800 rounded-2xl overflow-hidden shadow-2xl shrink-0 flex flex-col self-center max-w-4xl w-full">
-           {sessionData.fileName && (sessionData.fileName.includes('.mkv') || sessionData.fileName.toLowerCase().includes('x265') || sessionData.fileName.toLowerCase().includes('hevc')) ? (
-             <div className="w-full aspect-video bg-slate-900 flex flex-col items-center justify-center p-8 text-center text-slate-400">
-               <AlertCircle className="w-16 h-16 text-rose-500/50 mb-4" />
-               <h3 className="text-xl font-bold text-white mb-2">Unsupported Video Format</h3>
-               <p className="max-w-md">
-                 This is an MKV or x265/HEVC video. Web browsers physically <strong>cannot play</strong> this format. 
-                 You must click "Play in VLC" below or download the file to view it on your device.
-               </p>
-             </div>
-           ) : (
-             <video 
-               src={`/api/torrent/stream/${sessionId}`} 
-               controls 
-               autoPlay 
-               playsInline
-               className="w-full aspect-video bg-slate-900"
-             >
-               Your browser does not support the video tag.
-             </video>
-           )}
+           <video 
+             src={`/api/torrent/stream/${sessionId}`} 
+             controls 
+             autoPlay 
+             playsInline
+             className="w-full aspect-video bg-slate-900"
+           >
+             Your browser does not support the video tag.
+           </video>
            <div className="p-4 bg-slate-900 text-sm text-slate-400 flex flex-col sm:flex-row justify-between items-center gap-4 border-t border-slate-800">
              <div className="flex flex-col">
                 <span>Streaming Status: Buffering from {sessionData.peers} peers</span>
-                <span className="text-xs text-slate-500 mt-1">If the video isn't playing, it might be buffering metadata.</span>
+                {sessionData.fileName && (sessionData.fileName.includes('.mkv') || sessionData.fileName.toLowerCase().includes('x265') || sessionData.fileName.toLowerCase().includes('hevc')) ? (
+                  <span className="text-xs text-amber-500 mt-1">Live Server Transcoding Active. (Vercel max 10s-60s timeout may apply to streams)</span>
+                ) : (
+                  <span className="text-xs text-slate-500 mt-1">If the video isn't playing, it might be buffering metadata.</span>
+                )}
              </div>
              <div className="flex items-center gap-2">
                <span className="font-mono bg-slate-950 px-2 py-1 rounded text-emerald-400">{sessionData.speed ? formatBytes(sessionData.speed) : '0 Bytes'}/s</span>
