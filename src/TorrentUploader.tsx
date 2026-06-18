@@ -70,8 +70,15 @@ export const TorrentUploader: React.FC<{ isGuest?: boolean }> = ({ isGuest }) =>
         body: JSON.stringify({ magnet, accessToken: token, action })
       });
       
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Failed to start');
+      let data;
+      const textResponse = await res.text();
+      try {
+        data = JSON.parse(textResponse);
+      } catch (e) {
+        throw new Error(`Server configuration error: ${textResponse.substring(0, 50)}... Make sure you are not using Vercel without proper API adjustments.`);
+      }
+
+      if (!res.ok) throw new Error(data?.error || 'Failed to start');
       
       setSessionId(data.sessionId);
     } catch (err: any) {

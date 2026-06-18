@@ -56,7 +56,12 @@ async function startServer() {
           'udp://open.demonii.com:1337/announce',
           'udp://tracker.openbittorrent.com:80',
           'udp://tracker.ccp.ovh:6969/announce',
-          'udp://exodus.desync.com:6969'
+          'udp://exodus.desync.com:6969',
+          'wss://tracker.btorrent.xyz',
+          'wss://tracker.openwebtorrent.com',
+          'wss://tracker.fastcast.nz',
+          'http://tracker.openbittorrent.com:80/announce',
+          'http://tracker2.wasabii.com.tw:6969/announce'
         ]
       });
 
@@ -81,6 +86,7 @@ async function startServer() {
 
         if (action === 'stream') {
            session.status = 'ready_to_stream';
+           file.select(); // Eagerly download the file pieces
            
            // Status updater for streaming (progress reflects downloaded chunks)
            let interval = setInterval(() => {
