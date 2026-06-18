@@ -183,7 +183,14 @@ export const TorrentUploader: React.FC<{ isGuest?: boolean }> = ({ isGuest }) =>
              <div className="flex flex-col">
                 <span>Streaming Status: Buffering from {sessionData.peers} peers</span>
                 {sessionData.fileName && (sessionData.fileName.includes('.mkv') || sessionData.fileName.toLowerCase().includes('x265') || sessionData.fileName.toLowerCase().includes('hevc')) ? (
-                  <span className="text-xs text-amber-500 mt-1">Native streaming enabled for MKV/x265. Seeking works! If screen is black, use VLC or your device lacks HEVC hardware decoding.</span>
+                  <div className="flex flex-col gap-1">
+                    <span className="text-xs text-amber-500 mt-1 font-medium bg-amber-500/10 px-2 py-1 rounded inline-block w-max">
+                      ⚠️ Live Server Transcoding Active
+                    </span>
+                    <span className="text-[11px] text-slate-500">
+                      Acts as a live stream; seeking/skipping is disabled. For full seek controls, use "Play in VLC" or "Download File". (Vercel max 10s-60s timeout may apply)
+                    </span>
+                  </div>
                 ) : (
                   <span className="text-xs text-slate-500 mt-1">If the video isn't playing, it might be buffering metadata.</span>
                 )}
