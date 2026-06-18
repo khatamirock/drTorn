@@ -174,6 +174,7 @@ export const TorrentUploader: React.FC<{ isGuest?: boolean }> = ({ isGuest }) =>
              controls 
              autoPlay 
              playsInline
+             type="video/mp4"
              className="w-full aspect-video bg-slate-900"
            >
              Your browser does not support the video tag.

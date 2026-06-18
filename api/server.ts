@@ -1,6 +1,5 @@
 import express from 'express';
 import path from 'path';
-import { createServer as createViteServer } from 'vite';
 import torrentStream from 'torrent-stream';
 import { google } from 'googleapis';
 import crypto from 'crypto';
@@ -222,8 +221,8 @@ app.get('/api/torrent/stream/:id', (req, res) => {
         '-movflags', 'frag_keyframe+empty_moov',
         '-threads', '1'
       ])
-      .on('error', () => {
-         // Ignore ffmpeg disconnection errors
+      .on('error', (err) => {
+         console.error('ffmpeg encode error:', err);
       })
       .pipe(res, { end: true });
     return;
@@ -270,6 +269,7 @@ app.delete('/api/torrent/:id', (req, res) => {
 // --- VITE MIDDLEWARE / SPA FALLBACK ---
 async function setupVite() {
   if (process.env.NODE_ENV !== 'production' && !process.env.VERCEL) {
+    const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: 'spa',
