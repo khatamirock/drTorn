@@ -18,6 +18,8 @@ if (ffprobeStatic && ffprobeStatic.path) {
 
 // In-memory store for torrent sessions
 const sessions = new Map<string, any>();
+// Store promises to prevent concurrent duplicate session creation
+const sessionPromises = new Map<string, Promise<any>>();
 
 process.on('uncaughtException', (err) => {
   console.error('Uncaught Exception:', err);
@@ -26,21 +28,21 @@ process.on('unhandledRejection', (reason, promise) => {
   console.error('Unhandled Rejection:', reason);
 });
 
-const app = express();
-app.use(express.json());
+function getSessionId(magnet: string, action: string) {
+  return crypto.createHash('md5').update(magnet + action).digest('hex');
+}
 
-// --- API ROUTES ---
+async function ensureSession(sessionId: string, magnet: string, action: string, accessToken?: string) {
+  let session = sessions.get(sessionId);
+  if (session && session.engine) {
+    return session;
+  }
 
-app.post('/api/torrent/start', async (req, res) => {
-  try {
-    const { magnet, accessToken, action = 'save' } = req.body;
-    
-    if (!magnet || (action === 'save' && !accessToken)) {
-      return res.status(400).json({ error: 'Magnet link and access token are required for saving to Drive' });
-    }
+  if (sessionPromises.has(sessionId)) {
+    return sessionPromises.get(sessionId);
+  }
 
-    const sessionId = crypto.randomUUID();
-    
+  const promise = new Promise((resolve, reject) => {
     sessions.set(sessionId, {
       id: sessionId,
       status: 'connecting',
@@ -79,7 +81,6 @@ app.post('/api/torrent/start', async (req, res) => {
     engine.on('ready', async () => {
       let file: any = engine.files[0];
       for (const f of engine.files) {
-         // Try to prefer video files for streaming mode
         if (action === 'stream' && (f.name.endsWith('.mp4') || f.name.endsWith('.mkv') || f.name.endsWith('.webm'))) {
             if (!file.name.match(/\.(mp4|mkv|webm)$/i) || f.length > file.length) file = f;
         } else {
@@ -88,7 +89,7 @@ app.post('/api/torrent/start', async (req, res) => {
       }
 
       const session = sessions.get(sessionId);
-      if (!session) return;
+      if (!session) return reject(new Error('Session deleted'));
       
       session.fileName = file.name;
       session.fileSize = file.length;
@@ -97,19 +98,15 @@ app.post('/api/torrent/start', async (req, res) => {
 
       if (action === 'stream') {
          session.status = 'ready_to_stream';
-         file.select(); // Eagerly download the file pieces
+         file.select();
          
-         // Try to probe for duration
          ffmpeg.ffprobe(`http://127.0.0.1:3000/api/torrent/stream/${sessionId}?direct=true`, (err, metadata) => {
              if (!err && metadata && metadata.format && metadata.format.duration) {
                  const s = sessions.get(sessionId);
-                 if (s) {
-                     s.duration = parseFloat(metadata.format.duration);
-                 }
+                 if (s) s.duration = parseFloat(metadata.format.duration);
              }
          });
          
-         // Status updater for streaming (progress reflects downloaded chunks)
          let interval = setInterval(() => {
            const s = sessions.get(sessionId);
            if (s && s.status === 'ready_to_stream') {
@@ -122,55 +119,50 @@ app.post('/api/torrent/start', async (req, res) => {
            }
          }, 1000);
          
-         return;
+         return resolve(session);
       }
 
-      session.status = 'uploading'; // Saving to drive mode
+      session.status = 'uploading';
 
-      // Setup Google Drive API
-      const auth = new google.auth.OAuth2();
-      auth.setCredentials({ access_token: accessToken });
-      const drive = google.drive({ version: 'v3', auth });
-      
-      let interval = setInterval(() => {
-        const s = sessions.get(sessionId);
-        if (s && s.status === 'uploading') {
-          const downloaded = engine.swarm.downloaded;
-          s.speed = engine.swarm.downloadSpeed();
-          s.peers = engine.swarm.wires.length;
-          s.progress = (downloaded / file.length) * 100;
-        }
-      }, 1000);
+      if (accessToken) {
+        const auth = new google.auth.OAuth2();
+        auth.setCredentials({ access_token: accessToken });
+        const drive = google.drive({ version: 'v3', auth });
+        
+        let interval = setInterval(() => {
+          const s = sessions.get(sessionId);
+          if (s && s.status === 'uploading') {
+            const downloaded = engine.swarm.downloaded;
+            s.speed = engine.swarm.downloadSpeed();
+            s.peers = engine.swarm.wires.length;
+            s.progress = (downloaded / file.length) * 100;
+          }
+        }, 1000);
 
-      try {
-        // Stream the file directly to Google Drive
-        await drive.files.create({
-          requestBody: {
-            name: file.name,
-          },
-          media: {
-            body: file.createReadStream(),
-          },
-        });
-
-        const s = sessions.get(sessionId);
-        if (s) {
-          s.status = 'completed';
-          s.progress = 100;
-        }
-      } catch (err: any) {
-        console.error('Upload Error:', err);
-        const s = sessions.get(sessionId);
-        if (s) {
-          s.status = 'error';
-          s.error = err.message || 'Upload failed';
-        }
-      } finally {
-        clearInterval(interval);
         try {
-           engine.destroy(() => {});
-        } catch(e) {}
+          await drive.files.create({
+            requestBody: { name: file.name },
+            media: { body: file.createReadStream() },
+          });
+
+          const s = sessions.get(sessionId);
+          if (s) {
+            s.status = 'completed';
+            s.progress = 100;
+          }
+        } catch (err: any) {
+          console.error('Upload Error:', err);
+          const s = sessions.get(sessionId);
+          if (s) {
+            s.status = 'error';
+            s.error = err.message || 'Upload failed';
+          }
+        } finally {
+          clearInterval(interval);
+          try { engine.destroy(() => {}); } catch(e) {}
+        }
       }
+      resolve(session);
     });
     
     engine.on('error', (err: any) => {
@@ -180,7 +172,39 @@ app.post('/api/torrent/start', async (req, res) => {
          s.status = 'error';
          s.error = err.message;
        }
+       sessionPromises.delete(sessionId);
+       reject(err);
     });
+  });
+  
+  sessionPromises.set(sessionId, promise as Promise<any>);
+  
+  promise.then(() => {
+    sessionPromises.delete(sessionId);
+  }).catch(() => {
+    sessionPromises.delete(sessionId);
+  });
+  
+  return promise;
+}
+
+const app = express();
+app.use(express.json());
+
+// --- API ROUTES ---
+
+app.post('/api/torrent/start', async (req, res) => {
+  try {
+    const { magnet, accessToken, action = 'save' } = req.body;
+    
+    if (!magnet || (action === 'save' && !accessToken)) {
+      return res.status(400).json({ error: 'Magnet link and access token are required for saving to Drive' });
+    }
+
+    const sessionId = getSessionId(magnet, action);
+    
+    // Fire and forget ensureSession
+    ensureSession(sessionId, magnet, action, accessToken).catch(e => console.error(e));
 
     res.json({ sessionId });
   } catch (err: any) {
@@ -189,8 +213,17 @@ app.post('/api/torrent/start', async (req, res) => {
   }
 });
 
-app.get('/api/torrent/status/:id', (req, res) => {
-  const session = sessions.get(req.params.id);
+app.get('/api/torrent/status/:id', async (req, res) => {
+  let session = sessions.get(req.params.id);
+  
+  if (!session && req.query.magnet && req.query.action) {
+    try {
+      session = await ensureSession(req.params.id, req.query.magnet as string, req.query.action as string);
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message });
+    }
+  }
+
   if (!session) {
     return res.status(404).json({ error: 'Session not found' });
   }
@@ -199,8 +232,17 @@ app.get('/api/torrent/status/:id', (req, res) => {
   res.json(safeSession);
 });
 
-app.get('/api/torrent/stream/:id', (req, res) => {
-  const session = sessions.get(req.params.id);
+app.get('/api/torrent/stream/:id', async (req, res) => {
+  let session = sessions.get(req.params.id);
+
+  if ((!session || !session.file || !session.engine) && req.query.magnet) {
+    try {
+      session = await ensureSession(req.params.id, req.query.magnet as string, 'stream');
+    } catch (err: any) {
+      return res.status(500).send('Failed to initialize stream session');
+    }
+  }
+
   if (!session || !session.file || !session.engine) {
     return res.status(404).send('Not found or not ready');
   }

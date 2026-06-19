@@ -8,15 +8,16 @@ export const TorrentUploader: React.FC<{ isGuest?: boolean }> = ({ isGuest }) =>
   // Stats
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [sessionData, setSessionData] = useState<any>(null);
+  const [currentAction, setCurrentAction] = useState<string>('stream');
   const [error, setError] = useState<string | null>(null);
   const [seekTimeOffset, setSeekTimeOffset] = useState<number>(0);
 
   useEffect(() => {
     let interval: any;
-    if (sessionId) {
+    if (sessionId && magnet) {
       interval = setInterval(async () => {
         try {
-          const res = await fetch(`/api/torrent/status/${sessionId}`);
+          const res = await fetch(`/api/torrent/status/${sessionId}?magnet=${encodeURIComponent(magnet)}&action=${currentAction}`);
           if (!res.ok) {
             // Check if backend crashed and proxy is returning HTML
             const contentType = res.headers.get('content-type');
@@ -65,6 +66,7 @@ export const TorrentUploader: React.FC<{ isGuest?: boolean }> = ({ isGuest }) =>
       setSessionId(null);
       setSessionData(null);
       setSeekTimeOffset(0);
+      setCurrentAction(action);
 
       const res = await fetch('/api/torrent/start', {
         method: 'POST',
@@ -173,7 +175,7 @@ export const TorrentUploader: React.FC<{ isGuest?: boolean }> = ({ isGuest }) =>
         <section className="bg-black border border-slate-800 rounded-2xl overflow-hidden shadow-2xl shrink-0 flex flex-col self-center max-w-4xl w-full">
            <video 
              key={`video-${sessionId}-${seekTimeOffset}`}
-             src={`/api/torrent/stream/${sessionId}${seekTimeOffset ? `?time=${seekTimeOffset}` : ''}`}
+             src={`/api/torrent/stream/${sessionId}?magnet=${encodeURIComponent(magnet)}${seekTimeOffset ? `&time=${seekTimeOffset}` : ''}`}
              controls 
              autoPlay 
              playsInline
@@ -219,7 +221,7 @@ export const TorrentUploader: React.FC<{ isGuest?: boolean }> = ({ isGuest }) =>
              <div className="flex items-center gap-2">
                <span className="font-mono bg-slate-950 px-2 py-1 rounded text-emerald-400">{sessionData.speed ? formatBytes(sessionData.speed) : '0 Bytes'}/s</span>
                <a 
-                 href={`vlc://${window.location.origin}/api/torrent/stream/${sessionId}`}
+                 href={`vlc://${window.location.origin}/api/torrent/stream/${sessionId}?magnet=${encodeURIComponent(magnet)}`}
                  className="bg-orange-600 hover:bg-orange-500 text-white px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1 transition-colors shrink-0"
                  title="Requires VLC Media Player installed"
                >
@@ -227,7 +229,7 @@ export const TorrentUploader: React.FC<{ isGuest?: boolean }> = ({ isGuest }) =>
                  Play in VLC
                </a>
                <a 
-                 href={`/api/torrent/stream/${sessionId}?download=true`} 
+                 href={`/api/torrent/stream/${sessionId}?magnet=${encodeURIComponent(magnet)}&download=true`} 
                  download={sessionData.fileName}
                  className="bg-slate-800 hover:bg-slate-700 text-white px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1 transition-colors shrink-0"
                >
