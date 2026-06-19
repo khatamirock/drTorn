@@ -246,7 +246,7 @@ app.get('/api/torrent/stream/:id', (req, res) => {
       .pipe(res, { end: true });
       
     req.on('close', () => {
-       res.end();
+       try { cmd.kill('SIGKILL'); } catch (e) {}
     });
     
     return;
@@ -260,6 +260,10 @@ app.get('/api/torrent/stream/:id', (req, res) => {
 
     const chunksize = (end - start) + 1;
     const fileStream = file.createReadStream({ start, end });
+    
+    fileStream.on('error', (err) => {
+      // Ignore stream errors
+    });
 
     res.writeHead(206, {
       'Content-Range': `bytes ${start}-${end}/${fileSize}`,
@@ -269,13 +273,23 @@ app.get('/api/torrent/stream/:id', (req, res) => {
       ...(req.query.download === 'true' && { 'Content-Disposition': `attachment; filename="${encodeURIComponent(file.name)}"` }),
     });
     fileStream.pipe(res);
+    req.on('close', () => {
+      try { fileStream.destroy(); } catch (e) {}
+    });
   } else {
     res.writeHead(200, {
       'Content-Length': fileSize,
       'Content-Type': contentType,
       ...(req.query.download === 'true' && { 'Content-Disposition': `attachment; filename="${encodeURIComponent(file.name)}"` }),
     });
-    file.createReadStream().pipe(res);
+    const fileStream = file.createReadStream();
+    fileStream.on('error', (err) => {
+      // Ignore
+    });
+    fileStream.pipe(res);
+    req.on('close', () => {
+      try { fileStream.destroy(); } catch (e) {}
+    });
   }
 });
 
