@@ -1,4 +1,43 @@
+import http from 'http';
 import express from 'express';
+
+function createLocalVideoServer(file: any, contentType: string): Promise<{ server: http.Server, url: string }> {
+  return new Promise((resolve) => {
+    const server = http.createServer((localReq, localRes) => {
+      const range = localReq.headers.range;
+      const fileSize = file.length;
+      if (range) {
+        const parts = range.replace(/bytes=/, "").split("-");
+        const start = parseInt(parts[0], 10);
+        const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+        const chunksize = (end - start) + 1;
+        const fileStream = file.createReadStream({ start, end });
+        fileStream.on('error', () => {});
+        localRes.writeHead(206, {
+          'Content-Range': `bytes ${start}-${end}/${fileSize}`,
+          'Accept-Ranges': 'bytes',
+          'Content-Length': chunksize,
+          'Content-Type': contentType,
+        });
+        fileStream.pipe(localRes);
+        localReq.on('close', () => { try { fileStream.destroy(); } catch(e){} });
+      } else {
+        localRes.writeHead(200, {
+          'Content-Length': fileSize,
+          'Content-Type': contentType,
+        });
+        const fileStream = file.createReadStream();
+        fileStream.on('error', () => {});
+        fileStream.pipe(localRes);
+        localReq.on('close', () => { try { fileStream.destroy(); } catch(e){} });
+      }
+    });
+    server.listen(0, '127.0.0.1', () => {
+      const address = server.address() as any;
+      resolve({ server, url: `http://127.0.0.1:${address.port}/` });
+    });
+  });
+}
 import path from 'path';
 import torrentStream from 'torrent-stream';
 import { google } from 'googleapis';
@@ -100,12 +139,18 @@ async function ensureSession(sessionId: string, magnet: string, action: string, 
          session.status = 'ready_to_stream';
          file.select();
          
-         const probeUrl = baseUrl ? `${baseUrl}/api/torrent/stream/${sessionId}?direct=true` : `http://127.0.0.1:3000/api/torrent/stream/${sessionId}?direct=true`;
-         ffmpeg.ffprobe(probeUrl, (err, metadata) => {
-             if (!err && metadata && metadata.format && metadata.format.duration) {
-                 const s = sessions.get(sessionId);
-                 if (s) s.duration = parseFloat(metadata.format.duration);
-             }
+         let _contentType = 'video/mp4';
+         if (file.name.endsWith('.mkv')) _contentType = 'video/x-matroska';
+         if (file.name.endsWith('.webm')) _contentType = 'video/webm';
+
+         createLocalVideoServer(file, _contentType).then(({ server, url }) => {
+            ffmpeg.ffprobe(url, (err, metadata) => {
+                 if (!err && metadata && metadata.format && metadata.format.duration) {
+                     const s = sessions.get(sessionId);
+                     if (s) s.duration = parseFloat(metadata.format.duration);
+                 }
+                 try { server.close(); } catch(e){}
+             });
          });
          
          let interval = setInterval(() => {
@@ -276,32 +321,35 @@ app.get('/api/torrent/stream/:id', async (req, res) => {
 
     if (req.method === 'HEAD') return res.end();
 
-    const protocol = req.headers['x-forwarded-proto'] || (req.connection.encrypted ? 'https' : 'http');
-    const host = req.headers.host || '127.0.0.1:3000';
-    const localUrl = `${protocol}://${host}/api/torrent/stream/${session.id}?direct=true`;
+    try {
+      const { server: localServer, url: localUrl } = await createLocalVideoServer(file, contentType);
 
-    const cmd = ffmpeg(localUrl)
-      .format('mp4')
-      .videoCodec('libx264')
-      .audioCodec('aac');
+      const cmd = ffmpeg(localUrl)
+        .format('mp4')
+        .videoCodec('libx264')
+        .audioCodec('aac');
 
-    if (timeParam > 0) {
-      cmd.seekInput(timeParam);
+      if (timeParam > 0) {
+        cmd.seekInput(timeParam);
+      }
+
+      cmd.outputOptions([
+          '-preset', 'ultrafast',
+          '-movflags', 'frag_keyframe+empty_moov',
+          '-threads', '1'
+        ])
+        .on('error', (err) => {
+           // Ignore
+        })
+        .pipe(res, { end: true });
+        
+      req.on('close', () => {
+         try { cmd.kill('SIGKILL'); } catch (e) {}
+         try { localServer.close(); } catch (e) {}
+      });
+    } catch (e: any) {
+      res.end();
     }
-
-    cmd.outputOptions([
-        '-preset', 'ultrafast',
-        '-movflags', 'frag_keyframe+empty_moov',
-        '-threads', '1'
-      ])
-      .on('error', (err) => {
-         // Ignore
-      })
-      .pipe(res, { end: true });
-      
-    req.on('close', () => {
-       try { cmd.kill('SIGKILL'); } catch (e) {}
-    });
     
     return;
   }
