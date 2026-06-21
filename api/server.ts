@@ -32,7 +32,7 @@ function getSessionId(magnet: string, action: string) {
   return crypto.createHash('md5').update(magnet + action).digest('hex');
 }
 
-async function ensureSession(sessionId: string, magnet: string, action: string, accessToken?: string) {
+async function ensureSession(sessionId: string, magnet: string, action: string, accessToken?: string, baseUrl?: string) {
   let session = sessions.get(sessionId);
   if (session && session.engine) {
     return session;
@@ -100,7 +100,8 @@ async function ensureSession(sessionId: string, magnet: string, action: string, 
          session.status = 'ready_to_stream';
          file.select();
          
-         ffmpeg.ffprobe(`http://127.0.0.1:3000/api/torrent/stream/${sessionId}?direct=true`, (err, metadata) => {
+         const probeUrl = baseUrl ? `${baseUrl}/api/torrent/stream/${sessionId}?direct=true` : `http://127.0.0.1:3000/api/torrent/stream/${sessionId}?direct=true`;
+         ffmpeg.ffprobe(probeUrl, (err, metadata) => {
              if (!err && metadata && metadata.format && metadata.format.duration) {
                  const s = sessions.get(sessionId);
                  if (s) s.duration = parseFloat(metadata.format.duration);
@@ -202,9 +203,12 @@ app.post('/api/torrent/start', async (req, res) => {
     }
 
     const sessionId = getSessionId(magnet, action);
+    const protocol = req.headers['x-forwarded-proto'] || (req.connection.encrypted ? 'https' : 'http');
+    const host = req.headers.host || '127.0.0.1:3000';
+    const baseUrl = `${protocol}://${host}`;
     
     // Fire and forget ensureSession
-    ensureSession(sessionId, magnet, action, accessToken).catch(e => console.error(e));
+    ensureSession(sessionId, magnet, action, accessToken, baseUrl).catch(e => console.error(e));
 
     res.json({ sessionId });
   } catch (err: any) {
@@ -218,7 +222,10 @@ app.get('/api/torrent/status/:id', async (req, res) => {
   
   if (!session && req.query.magnet && req.query.action) {
     try {
-      session = await ensureSession(req.params.id, req.query.magnet as string, req.query.action as string);
+      const protocol = req.headers['x-forwarded-proto'] || (req.connection.encrypted ? 'https' : 'http');
+      const host = req.headers.host || '127.0.0.1:3000';
+      const baseUrl = `${protocol}://${host}`;
+      session = await ensureSession(req.params.id, req.query.magnet as string, req.query.action as string, undefined, baseUrl);
     } catch (err: any) {
       return res.status(500).json({ error: err.message });
     }
@@ -237,7 +244,10 @@ app.get('/api/torrent/stream/:id', async (req, res) => {
 
   if ((!session || !session.file || !session.engine) && req.query.magnet) {
     try {
-      session = await ensureSession(req.params.id, req.query.magnet as string, 'stream');
+      const protocol = req.headers['x-forwarded-proto'] || (req.connection.encrypted ? 'https' : 'http');
+      const host = req.headers.host || '127.0.0.1:3000';
+      const baseUrl = `${protocol}://${host}`;
+      session = await ensureSession(req.params.id, req.query.magnet as string, 'stream', undefined, baseUrl);
     } catch (err: any) {
       return res.status(500).send('Failed to initialize stream session');
     }
@@ -266,7 +276,9 @@ app.get('/api/torrent/stream/:id', async (req, res) => {
 
     if (req.method === 'HEAD') return res.end();
 
-    const localUrl = `http://127.0.0.1:3000/api/torrent/stream/${session.id}?direct=true`;
+    const protocol = req.headers['x-forwarded-proto'] || (req.connection.encrypted ? 'https' : 'http');
+    const host = req.headers.host || '127.0.0.1:3000';
+    const localUrl = `${protocol}://${host}/api/torrent/stream/${session.id}?direct=true`;
 
     const cmd = ffmpeg(localUrl)
       .format('mp4')
